@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -9,31 +8,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Richtermnd/anecdotebot/client"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 const (
-	helpText = `/help - список команд
+	helpText = `
+	/help - список команд
 	/list - список категорий
 	/delay <задержка> - задержка между анекдотами
 	/category <номер категории> - выбор категории
 	/anecdote - случайный анекдот`
 
-	listText = `1 - Анекдот;
-	2 - Рассказы;
-	3 - Стишки;
-	4 - Афоризмы;
-	5 - Цитаты;
-	6 - Тосты;
-	8 - Статусы;
-	11 - Анекдот (+18);
-	12 - Рассказы (+18);
-	13 - Стишки (+18);
-	14 - Афоризмы (+18);
-	15 - Цитаты (+18);
-	16 - Тосты (+18);
-	18 - Статусы (+18);`
+	categoryList = `
+	1 - Анекдот
+	2 - Рассказы
+	3 - Стишки
+	4 - Афоризмы
+	5 - Цитаты
+	6 - Тосты
+	8 - Статусы
+	11 - Анекдот (+18)
+	12 - Рассказы (+18)
+	13 - Стишки (+18)
+	14 - Афоризмы (+18)
+	15 - Цитаты (+18)
+	16 - Тосты (+18)
+	18 - Статусы (+18)`
 
 	sessionFile = "storage/sessions.json"
 )
@@ -44,61 +44,8 @@ var (
 	log      = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 )
 
-type session struct {
-	ID       int64
-	Category int           `json:"category"`
-	Delay    time.Duration `json:"delay"`
-	cancel   func()        `json:"-"`
-}
-
-func Session(id int64) *session {
-	s, ok := sessions[id]
-	if ok {
-		return s
-	}
-	s = &session{
-		ID:       id,
-		Category: 1,
-		Delay:    time.Hour,
-	}
-	sessions[id] = s
-	return s
-}
-
-func (s *session) SendAnecdote() {
-	log := log.With("id", s.ID)
-	log.Debug("send anecdote")
-	SendMessage(s.ID, client.GetAnecdote(s.Category))
-	log.Debug("anecdote sent")
-}
-
-func (s *session) Notify() {
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	go func(ctx context.Context) {
-		for {
-			log := log.With("id", s.ID)
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				log.Debug("send anecdote")
-				s.SendAnecdote()
-			}
-			time.Sleep(s.Delay)
-		}
-	}(ctx)
-}
-
-func (s *session) StopNotify() {
-	if s.cancel == nil {
-		return
-	}
-	s.cancel()
-}
-
 func InitBot() {
-	uploadSessions()
+	// init bot
 	token := os.Getenv("BOT_TOKEN")
 	if token == "" {
 		panic("empty token")
@@ -107,6 +54,11 @@ func InitBot() {
 	bot, err = tgbotapi.NewBotAPI(token)
 	if err != nil {
 		panic(err)
+	}
+	// upload sessions
+	uploadSessions()
+	for _, s := range sessions {
+		s.Notify()
 	}
 }
 
@@ -124,16 +76,18 @@ func Listen() {
 			continue
 		}
 		// Handle command
-		if update.Message.IsCommand() {
-			log.Info("Receive command", "from", update.Message.From.ID, "command", update.Message.Command())
-			handleCommand(update.Message)
+		if !update.Message.IsCommand() {
+			SendText(update.Message.Chat.ID, "/help чтобы узнать список команд.")
 			continue
 		}
-		SendMessage(update.Message.Chat.ID, "/help чтобы узнать список команд.")
+
+		log.Info("Receive command", "from", update.Message.From.ID, "command", update.Message.Command())
+		handleCommand(update.Message)
+		continue
 	}
 }
 
-func SendMessage(id int64, text string) {
+func SendText(id int64, text string) {
 	reply := tgbotapi.NewMessage(id, text)
 	bot.Send(reply)
 }
@@ -151,25 +105,21 @@ func handleCommand(msg *tgbotapi.Message) {
 	// msg.Text
 	switch msg.Command() {
 	case "category":
-		// set category
 		setCategory(msg)
 	case "delay":
-		// set delay
 		setDelay(msg)
 	case "stop":
 		s := Session(msg.Chat.ID)
 		s.StopNotify()
 	case "anecdote":
-		// send anecdote
 		s := Session(msg.Chat.ID)
 		s.SendAnecdote()
 	case "list":
-		// send list of categories
-		SendMessage(msg.Chat.ID, listText)
+		SendText(msg.Chat.ID, categoryList)
 	case "help":
-		SendMessage(msg.Chat.ID, helpText)
+		SendText(msg.Chat.ID, helpText)
 	default:
-		SendMessage(msg.Chat.ID, "/help чтобы узнать список команд.")
+		SendText(msg.Chat.ID, "/help чтобы узнать список команд.")
 	}
 }
 
@@ -179,25 +129,25 @@ func setCategory(msg *tgbotapi.Message) {
 	args := getArgs(msg)
 	if len(args) != 1 {
 		log.Debug("invalid args")
-		SendMessage(msg.Chat.ID, "Нужно указать категорию.")
+		SendText(msg.Chat.ID, "Нужно указать категорию.")
 		return
 	}
 
 	category, err := strconv.Atoi(args[0])
 	if err != nil {
 		log.Debug("invalid category")
-		SendMessage(msg.Chat.ID, "Категория должна быть числом от 1 до 18")
+		SendText(msg.Chat.ID, "Категория должна быть числом от 1 до 18")
 		return
 	}
 
 	if category < 1 || category > 18 {
 		log.Debug("invalid category")
-		SendMessage(msg.Chat.ID, "Категория должна быть числом от 1 до 18")
+		SendText(msg.Chat.ID, "Категория должна быть числом от 1 до 18")
 		return
 	}
 	s := Session(msg.Chat.ID)
 	s.Category = category
-	SendMessage(msg.Chat.ID, "Категория изменена.")
+	SendText(msg.Chat.ID, "Категория изменена.")
 	log.Debug("category setted", "category", category)
 }
 
@@ -207,13 +157,13 @@ func setDelay(msg *tgbotapi.Message) {
 	args := getArgs(msg)
 	if len(args) != 1 {
 		log.Debug("invalid args")
-		SendMessage(msg.Chat.ID, "Нужно указать время.\nПримеры:\n1d - 1 день\n2h10m - 2 часа 10 минут \n30m - 30 мин\n15s - 15 сек")
+		SendText(msg.Chat.ID, "Нужно указать время.\nПримеры:\n1d - 1 день\n2h10m - 2 часа 10 минут \n30m - 30 мин\n15s - 15 сек")
 		return
 	}
 	dur, err := time.ParseDuration(args[0])
 	if err != nil {
 		log.Debug("invalid time")
-		SendMessage(msg.Chat.ID, "Нужно указать время.\nПримеры:\n1d - 1 день\n2h10m - 2 часа 10 минут \n30m - 30 мин\n15s - 15 сек")
+		SendText(msg.Chat.ID, "Нужно указать время.\nПримеры:\n1d - 1 день\n2h10m - 2 часа 10 минут \n30m - 30 мин\n15s - 15 сек")
 		return
 	}
 	s := Session(msg.Chat.ID)
